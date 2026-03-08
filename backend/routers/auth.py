@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from jose import JWTError, jwt
 import bcrypt
 from fastapi.security import OAuth2PasswordBearer
+from typing import List
 import os
 
 from database import get_db
@@ -24,6 +25,52 @@ def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+
+# ─── RBAC Permission System ───
+ROLE_PERMISSIONS = {
+    "admin": {
+        "manage_users", "manage_content", "manage_all_content", "delete_any_content",
+        "view_admin_analytics", "view_analytics", "upload_content",
+        "view_content", "search", "use_chatbot", "bookmark", "notes",
+        "collections", "study_timer", "view_personal_analytics",
+    },
+    "faculty": {
+        "manage_content", "upload_content", "view_analytics",
+        "view_content", "search", "use_chatbot", "bookmark", "notes",
+        "collections", "study_timer", "view_personal_analytics",
+    },
+    "staff": {
+        "manage_content", "upload_content", "view_analytics",
+        "view_content", "search", "use_chatbot", "bookmark", "notes",
+        "collections", "study_timer", "view_personal_analytics",
+    },
+    "student": {
+        "upload_content", "view_content", "search", "use_chatbot",
+        "bookmark", "notes", "collections", "study_timer",
+        "view_personal_analytics",
+    },
+    "alumni": {
+        "view_content", "search", "use_chatbot", "bookmark", "notes",
+        "view_personal_analytics",
+    },
+    "parent": {
+        "view_content", "search", "view_personal_analytics",
+    },
+}
+
+
+def require_role(*permissions: str):
+    """Dependency factory: require user to have at least one of the given permissions."""
+    def checker(current_user: User = Depends(get_current_user)):
+        user_perms = ROLE_PERMISSIONS.get(current_user.role, set())
+        if not any(p in user_perms for p in permissions):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied. Your role '{current_user.role}' does not have permission for this action.",
+            )
+        return current_user
+    return checker
 
 
 def create_access_token(data: dict):
@@ -130,3 +177,58 @@ def update_me(
     db.commit()
     db.refresh(current_user)
     return UserResponse.model_validate(current_user)
+
+
+@router.get("/permissions")
+def get_my_permissions(current_user: User = Depends(get_current_user)):
+    """Get current user's role and permissions."""
+    perms = ROLE_PERMISSIONS.get(current_user.role, set())
+    return {
+        "role": current_user.role,
+        "permissions": sorted(list(perms)),
+    }
+
+
+# ─── Admin-only endpoints ───
+@router.get("/users", response_model=List[UserResponse])
+def list_users(
+    admin: User = Depends(require_role("manage_users")),
+    db: Session = Depends(get_db),
+):
+    """List all users (admin only)."""
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    return [UserResponse.model_validate(u) for u in users]
+
+
+@router.put("/users/{user_id}/role")
+def update_user_role(
+    user_id: str,
+    role: str,
+    admin: User = Depends(require_role("manage_users")),
+    db: Session = Depends(get_db),
+):
+    """Update a user's role (admin only)."""
+    valid_roles = ["student", "faculty", "staff", "admin", "alumni", "parent"]
+    if role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {valid_roles}")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.role = role
+    db.commit()
+    return {"message": f"Role updated to {role}", "user_id": user_id}
+
+
+@router.delete("/users/{user_id}")
+def deactivate_user(
+    user_id: str,
+    admin: User = Depends(require_role("manage_users")),
+    db: Session = Depends(get_db),
+):
+    """Deactivate a user (admin only)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_active = False
+    db.commit()
+    return {"message": "User deactivated"}

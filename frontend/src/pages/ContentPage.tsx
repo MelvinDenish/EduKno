@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { contentAPI, recommendAPI } from '../services/api';
+import { contentAPI, recommendAPI, collectionsAPI, notesAPI } from '../services/api';
 import {
     Eye, ThumbsUp, Download, ArrowLeft, Calendar, User, Tag,
     FileText, Video, BookMarked, BookOpen, Presentation, Clock,
-    Bookmark, ExternalLink
+    Bookmark, ExternalLink, FolderPlus, StickyNote, X, Save
 } from 'lucide-react';
 
 const TYPE_ICONS: Record<string, any> = {
     document: FileText, video: Video, article: BookMarked, course: BookOpen, presentation: Presentation,
 };
+
+const COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#ec4899'];
 
 export default function ContentPage() {
     const { id } = useParams<{ id: string }>();
@@ -19,6 +21,12 @@ export default function ContentPage() {
     const [loading, setLoading] = useState(true);
     const [isBookmarked, setIsBookmarked] = useState(false);
     const [downloading, setDownloading] = useState(false);
+
+    // Modal states
+    const [showNoteModal, setShowNoteModal] = useState(false);
+    const [noteForm, setNoteForm] = useState({ title: '', text: '', color: '#6366f1' });
+    const [showCollectionModal, setShowCollectionModal] = useState(false);
+    const [collections, setCollections] = useState<any[]>([]);
 
     useEffect(() => {
         if (id) loadContent(id);
@@ -49,9 +57,7 @@ export default function ContentPage() {
         try {
             const res = await contentAPI.upvote(id);
             setContent({ ...content, upvotes: res.data.upvotes });
-        } catch (err) {
-            console.error('Upvote error:', err);
-        }
+        } catch (err) { }
     };
 
     const handleDownload = async () => {
@@ -63,11 +69,8 @@ export default function ContentPage() {
             if (res.data.file_url) {
                 window.open(res.data.file_url, '_blank');
             }
-        } catch (err) {
-            console.error('Download error:', err);
-        } finally {
-            setDownloading(false);
-        }
+        } catch (err) { }
+        finally { setDownloading(false); }
     };
 
     const handleBookmark = async () => {
@@ -80,8 +83,44 @@ export default function ContentPage() {
                 await contentAPI.bookmark(id);
                 setIsBookmarked(true);
             }
+        } catch (err) { }
+    };
+
+    // Note actions
+    const handleSaveNote = async () => {
+        if (!id || !noteForm.text.trim()) return;
+        try {
+            await notesAPI.create({ ...noteForm, content_id: id });
+            setShowNoteModal(false);
+            setNoteForm({ title: '', text: '', color: '#6366f1' });
         } catch (err) {
-            console.error('Bookmark error:', err);
+            console.error('Note save error:', err);
+        }
+    };
+
+    // Collection actions
+    const openCollectionModal = async () => {
+        try {
+            const res = await collectionsAPI.list();
+            setCollections(res.data);
+            setShowCollectionModal(true);
+        } catch (err) {
+            console.error('Collection modal error:', err);
+        }
+    };
+
+    const addToCollection = async (collectionId: string) => {
+        if (!id) return;
+        try {
+            await collectionsAPI.addItem(collectionId, id);
+            setShowCollectionModal(false);
+            alert('Added to collection successfully!');
+        } catch (err: any) {
+            if (err.response?.status === 400) {
+                alert('Item is already in this collection.');
+            } else {
+                console.error('Add to collection error:', err);
+            }
         }
     };
 
@@ -140,7 +179,6 @@ export default function ContentPage() {
                             {content.description}
                         </p>
 
-                        {/* Tags */}
                         {content.tags?.length > 0 && (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
                                 {content.tags.map((tag: string) => (
@@ -156,11 +194,7 @@ export default function ContentPage() {
                             <button className="btn btn-primary" onClick={handleUpvote}>
                                 <ThumbsUp size={16} /> Upvote ({content.upvotes})
                             </button>
-                            <button
-                                className="btn btn-secondary"
-                                onClick={handleDownload}
-                                disabled={downloading}
-                            >
+                            <button className="btn btn-secondary" onClick={handleDownload} disabled={downloading}>
                                 {content.file_url ? (
                                     <><ExternalLink size={16} /> {downloading ? 'Opening...' : 'Open Resource'}</>
                                 ) : (
@@ -173,7 +207,14 @@ export default function ContentPage() {
                                 style={isBookmarked ? {} : { border: '1px solid var(--border-color)' }}
                             >
                                 <Bookmark size={16} fill={isBookmarked ? 'currentColor' : 'none'} />
-                                {isBookmarked ? 'Bookmarked' : 'Bookmark'}
+                            </button>
+
+                            {/* New Actions */}
+                            <button className="btn btn-ghost" style={{ border: '1px solid var(--border-color)' }} onClick={() => setShowNoteModal(true)}>
+                                <StickyNote size={16} /> Add Note
+                            </button>
+                            <button className="btn btn-ghost" style={{ border: '1px solid var(--border-color)' }} onClick={openCollectionModal}>
+                                <FolderPlus size={16} /> Add to Collection
                             </button>
                         </div>
                     </div>
@@ -254,31 +295,59 @@ export default function ContentPage() {
                             )}
                         </div>
                     </div>
-
-                    {/* Resource Link */}
-                    {content.file_url && (
-                        <div className="card">
-                            <h3 style={{ fontSize: '0.875rem', fontWeight: 700, marginBottom: 12 }}>📎 Resource Link</h3>
-                            <a
-                                href={content.file_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{
-                                    color: '#6366f1',
-                                    fontSize: '0.8rem',
-                                    wordBreak: 'break-all',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 4,
-                                }}
-                            >
-                                <ExternalLink size={14} />
-                                Open external resource
-                            </a>
-                        </div>
-                    )}
                 </div>
             </div>
+
+            {/* Note Modal */}
+            {showNoteModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowNoteModal(false)}>
+                    <div className="card" style={{ width: 500 }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                            <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>Add Note to Resource</h2>
+                            <button className="btn btn-ghost" onClick={() => setShowNoteModal(false)}><X size={18} /></button>
+                        </div>
+                        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: 12 }}>
+                            Linked to: <strong>{content.title}</strong>
+                        </p>
+                        <input className="input" placeholder="Note title (optional)" value={noteForm.title} onChange={e => setNoteForm({ ...noteForm, title: e.target.value })} style={{ marginBottom: 12 }} />
+                        <textarea className="input" placeholder="Write your note..." value={noteForm.text} onChange={e => setNoteForm({ ...noteForm, text: e.target.value })} rows={5} style={{ marginBottom: 12, resize: 'vertical' }} />
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+                            {COLORS.map(c => (
+                                <button key={c} onClick={() => setNoteForm({ ...noteForm, color: c })} style={{ width: 28, height: 28, borderRadius: '50%', background: c, border: 'none', cursor: 'pointer', outline: noteForm.color === c ? '2px solid white' : 'none', outlineOffset: 2 }} />
+                            ))}
+                        </div>
+                        <button className="btn btn-primary" onClick={handleSaveNote} style={{ width: '100%' }}>
+                            <Save size={16} /> Save Note
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Collection Modal */}
+            {showCollectionModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowCollectionModal(false)}>
+                    <div className="card" style={{ width: 400, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                            <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>Add to Collection</h2>
+                            <button className="btn btn-ghost" onClick={() => setShowCollectionModal(false)}><X size={18} /></button>
+                        </div>
+                        {collections.length === 0 ? (
+                            <p style={{ color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>You don't have any collections yet. Go to your Collections page to create one!</p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto' }}>
+                                {collections.map(c => (
+                                    <button key={c.id} className="btn btn-ghost" style={{ justifyContent: 'flex-start', padding: 12, border: '1px solid var(--border-color)', borderLeft: `4px solid ${c.color || '#6366f1'}` }} onClick={() => addToCollection(c.id)}>
+                                        <div style={{ textAlign: 'left' }}>
+                                            <div style={{ fontWeight: 600 }}>{c.name}</div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>{c.item_count} items</div>
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

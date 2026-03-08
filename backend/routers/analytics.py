@@ -5,13 +5,90 @@ from datetime import datetime, timedelta
 from collections import Counter
 
 from database import get_db
-from models import User, Content, Interaction, SearchLog
+from models import User, Content, Interaction, SearchLog, Bookmark, StudySession, Note, Collection
 from schemas import (
     AnalyticsOverview, ContentAnalytics, UserAnalytics, SearchAnalytics, ContentResponse
 )
 from routers.content import content_to_response
+from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
+
+
+@router.get("/personal")
+def get_personal_analytics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get personal learning analytics for the current user."""
+    days = 30
+    since = datetime.utcnow() - timedelta(days=days)
+
+    # Study sessions
+    sessions = db.query(StudySession).filter(
+        StudySession.user_id == current_user.id,
+        StudySession.started_at >= since,
+    ).all()
+    total_study = sum(s.duration_seconds for s in sessions)
+
+    # Daily study breakdown (last 14 days)
+    daily = {}
+    for s in sessions:
+        d = s.started_at.strftime("%Y-%m-%d") if s.started_at else "unknown"
+        daily[d] = daily.get(d, 0) + s.duration_seconds
+    daily_list = []
+    for i in range(14):
+        d = (datetime.utcnow() - timedelta(days=13 - i)).strftime("%Y-%m-%d")
+        daily_list.append({"date": d, "seconds": daily.get(d, 0)})
+
+    # Category breakdown from interactions
+    views = db.query(Interaction).filter(
+        Interaction.user_id == current_user.id,
+        Interaction.action == "view",
+        Interaction.content_id.isnot(None),
+    ).all()
+    cat_counts = Counter()
+    for v in views:
+        c = db.query(Content).filter(Content.id == v.content_id).first()
+        if c:
+            cat_counts[c.category] += 1
+    category_breakdown = [{"category": k, "count": v} for k, v in cat_counts.most_common(8)]
+
+    # Counts
+    total_notes = db.query(Note).filter(Note.user_id == current_user.id).count()
+    total_collections = db.query(Collection).filter(Collection.user_id == current_user.id).count()
+    total_bookmarks = db.query(Bookmark).filter(Bookmark.user_id == current_user.id).count()
+
+    # Recent activity
+    recent = db.query(Interaction).filter(
+        Interaction.user_id == current_user.id,
+        Interaction.timestamp >= since,
+    ).order_by(Interaction.timestamp.desc()).limit(20).all()
+
+    recent_activity = []
+    for r in recent:
+        entry = {"action": r.action, "timestamp": r.timestamp.isoformat() if r.timestamp else ""}
+        if r.content_id:
+            c = db.query(Content).filter(Content.id == r.content_id).first()
+            if c:
+                entry["content_title"] = c.title
+        if r.query:
+            entry["query"] = r.query
+        recent_activity.append(entry)
+
+    return {
+        "total_study_seconds": total_study,
+        "total_sessions": len(sessions),
+        "total_notes": total_notes,
+        "total_collections": total_collections,
+        "total_bookmarks": total_bookmarks,
+        "daily_study": daily_list,
+        "category_breakdown": category_breakdown,
+        "recent_activity": recent_activity[:15],
+        "streak_days": current_user.streak_days,
+        "reputation": current_user.reputation_score,
+    }
+
 
 
 @router.get("/overview", response_model=AnalyticsOverview)

@@ -1,9 +1,9 @@
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
     LayoutDashboard, Search, Upload, MessageCircle, BarChart3,
     Trophy, User, LogOut, ChevronLeft, ChevronRight, Sun, Moon,
-    BookOpen, GraduationCap
+    BookOpen, GraduationCap, Timer, StickyNote, FolderOpen, PieChart, Bookmark, BrainCircuit, Brain, Users
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -24,7 +24,19 @@ const navItems = [
     {
         section: 'AI & Insights', items: [
             { path: '/chatbot', label: 'EduBot', icon: MessageCircle },
+            { path: '/analyzer', label: 'AI Analyzer', icon: BrainCircuit },
             { path: '/analytics', label: 'Analytics', icon: BarChart3 },
+            { path: '/my-analytics', label: 'My Analytics', icon: PieChart },
+        ]
+    },
+    {
+        section: 'Study Tools', items: [
+            { path: '/study-timer', label: 'Study Timer', icon: Timer },
+            { path: '/rooms', label: 'Study Rooms', icon: Users },
+            { path: '/notes', label: 'My Notes', icon: StickyNote },
+            { path: '/collections', label: 'Collections', icon: FolderOpen },
+            { path: '/bookmarks', label: 'Bookmarks', icon: Bookmark },
+            { path: '/flashcards', label: 'SRS Flashcards', icon: Brain },
         ]
     },
     {
@@ -97,7 +109,7 @@ export default function Sidebar({ collapsed, onToggle, theme, onThemeToggle }: S
                         {!collapsed && (
                             <div className="user-info">
                                 <h4>{user.full_name}</h4>
-                                <p>{user.role}</p>
+                                <p style={{ textTransform: 'capitalize' }}>{user.role}</p>
                             </div>
                         )}
                     </div>

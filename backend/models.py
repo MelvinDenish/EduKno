@@ -151,3 +151,82 @@ class Bookmark(Base):
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
     content_id = Column(String, ForeignKey("content.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class StudySession(Base):
+    __tablename__ = "study_sessions"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    content_id = Column(String, ForeignKey("content.id"), nullable=True)
+    duration_seconds = Column(Integer, nullable=False, default=0)
+    session_type = Column(String(20), default="focus")
+    started_at = Column(DateTime, default=datetime.utcnow)
+    ended_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", foreign_keys=[user_id])
+    content = relationship("Content", foreign_keys=[content_id])
+
+
+class Note(Base):
+    __tablename__ = "notes"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    content_id = Column(String, ForeignKey("content.id"), nullable=True)
+    title = Column(String(255), default="")
+    text = Column(Text, nullable=False)
+    color = Column(String(7), default="#6366f1")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", foreign_keys=[user_id])
+    content = relationship("Content", foreign_keys=[content_id])
+
+
+class Collection(Base):
+    __tablename__ = "collections"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, default="")
+    color = Column(String(7), default="#6366f1")
+    is_public = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", foreign_keys=[user_id])
+    items = relationship("CollectionItem", back_populates="collection", cascade="all, delete-orphan")
+
+
+class CollectionItem(Base):
+    __tablename__ = "collection_items"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    collection_id = Column(String, ForeignKey("collections.id"), nullable=False)
+    content_id = Column(String, ForeignKey("content.id"), nullable=False)
+    order = Column(Integer, default=0)
+    added_at = Column(DateTime, default=datetime.utcnow)
+
+    collection = relationship("Collection", back_populates="items")
+    content = relationship("Content", foreign_keys=[content_id])
+
+
+class Flashcard(Base):
+    __tablename__ = "flashcards"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    deck_name = Column(String(255), default="Default") 
+    front = Column(Text, nullable=False)
+    back = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # SRS Fields (SuperMemo-2 algorithm)
+    repetition = Column(Integer, default=0)
+    interval = Column(Integer, default=1)  # in days
+    easiness_factor = Column(Float, default=2.5)
+    next_review_date = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", foreign_keys=[user_id])

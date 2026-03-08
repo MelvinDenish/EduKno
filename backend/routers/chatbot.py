@@ -1,241 +1,427 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import re
 import random
+import os
+import json
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
 from database import get_db
-from models import User, Content, Interaction
+from models import User, Content, Interaction, Flashcard
 from schemas import ChatMessage, ChatResponse
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/chatbot", tags=["EduBot"])
 
-# ─── Expanded Knowledge Base for RAG-style responses ───
-INSTITUTIONAL_KNOWLEDGE = {
-    "library": {
-        "hours": "The main library is open Monday-Friday 8:00 AM - 10:00 PM, Saturday 9:00 AM - 6:00 PM. During finals week, hours extend to midnight. Sunday hours are 12:00 PM - 8:00 PM.",
-        "services": "The library offers book lending (up to 10 books for 14 days), digital resources (IEEE, ACM, Springer, JSTOR), study rooms (bookable online), printing/scanning services, inter-library loans, and dedicated research assistance from subject librarians.",
-        "location": "The main library is in Building A, 2nd floor. The digital media lab is in the basement of Building A. The science reading room is in Building D, 3rd floor.",
-        "digital": "Access digital resources 24/7 through the library portal. Includes e-books, journals, databases (PubMed, Web of Science, Scopus), and research tools. VPN access available for off-campus use.",
-    },
-    "exams": {
-        "schedule": "Midterm exams are typically in Week 7-8. Final exams are in Week 15-16. Check the academic calendar for exact dates. Supplementary exams are held 2 weeks after finals.",
-        "preparation": "Study resources include past papers in the repository, tutoring sessions (book via the portal), study group formation tools, and practice exams. The Academic Success Center offers free tutoring in Math, Science, and Writing.",
-        "policies": "Students must bring valid ID to all exams. No electronic devices unless specified by the instructor. Accommodations available through the Disability Services Office. Make-up exams require documented medical or emergency reasons.",
-        "grading": "Standard grading scale: A (90-100), A- (87-89), B+ (83-86), B (80-82), B- (77-79), C+ (73-76), C (70-72), C- (67-69), D (60-66), F (<60). GPA calculated on 4.0 scale.",
-    },
-    "courses": {
-        "registration": "Course registration opens 2 weeks before each semester. Priority registration for seniors, then juniors, sophomores, and freshmen. Use the student portal to browse, add, and drop courses.",
-        "materials": "Course materials are available through the content repository. Faculty upload syllabi, lecture notes, assignments, and supplementary readings. Some courses use OpenStax free textbooks.",
-        "prerequisites": "Check course prerequisites in the catalog before registering. Override forms available from department heads for students with equivalent experience.",
-        "withdrawal": "Course withdrawal deadline is Week 10. Withdrawal after deadline requires dean's approval. Withdrawn courses appear as 'W' on transcript with no GPA impact.",
-    },
-    "facilities": {
-        "labs": "Computer labs in Buildings B and D, open 7 AM - 11 PM. Book time slots through the facilities portal. Software available: MATLAB, AutoCAD, Visual Studio, Python/Anaconda, Adobe Creative Suite.",
-        "wifi": "Campus WiFi: Connect to 'EduKno-Campus' using your student credentials. Guest WiFi available with temporary access code from the front desk. EduroAM also supported.",
-        "cafeteria": "Main cafeteria in Building A: 7 AM - 8 PM. Coffee shop in Building C: 7 AM - 9 PM. Food truck area near the quad: 11 AM - 3 PM on weekdays.",
-        "rooms": "Study rooms: Book through the facilities portal, available in the library (10 rooms, 2-8 people) and Building E (5 rooms, 4-12 people). Conference rooms require faculty/staff booking.",
-    },
-    "support": {
-        "academic": "Academic advisors available by appointment through the Student Success Center in Building A. Walk-in hours: Mon-Wed 10 AM - 2 PM. Each student is assigned a dedicated advisor.",
-        "technical": "IT support: email support@edukno.edu, call ext. 4000, or visit the help desk in Building B, Room 101 (Mon-Fri 8 AM - 6 PM). 24/7 online ticket system available.",
-        "counseling": "Student counseling services are confidential and free. Call ext. 5555 or visit Building E, 2nd floor. Crisis hotline available 24/7. Group therapy sessions available weekly.",
-        "financial": "Financial aid office in Building A, Room 200. Scholarship applications due March 1 for fall semester. Emergency financial assistance available through the Dean of Students office.",
-    },
-    "events": {
-        "upcoming": "Check the events calendar on the dashboard. Regular events include: weekly research seminars (Thursdays), monthly guest lectures, annual hackathon (November), research symposium (April).",
-        "clubs": "Over 50 student clubs: Tech Club, Debate Society, Art Collective, Sports clubs, Cultural organizations, Community service groups. Join through the student activities portal or during Activities Fair (first week of each semester).",
-        "career": "Career fairs: Fall (September) and Spring (March). Resume workshops monthly. Mock interview sessions bi-weekly. Alumni networking events quarterly. Internship database updated weekly.",
-    },
-    "academics": {
-        "programs": "50+ undergraduate programs and 30+ graduate programs across 8 schools. Popular programs: Computer Science, Business Administration, Engineering, Biology, Psychology.",
-        "research": "Research opportunities available for undergraduates through the Research Experience Program (REP). Faculty research labs accept student assistants. Summer research fellowships with stipend available.",
-        "honors": "Honors program requires 3.5+ GPA. Benefits include priority registration, dedicated study spaces, honors thesis opportunity, and cord at graduation.",
-        "transfer": "Transfer credits evaluated by the Registrar's office. Up to 60 credits accepted from accredited institutions. Course equivalency guide available online.",
-    },
-    "housing": {
-        "dormitories": "On-campus housing available in 6 residence halls. Single, double, and suite-style rooms. All rooms include WiFi, laundry facilities, and common areas. Housing deposit due April 1.",
-        "offcampus": "Off-campus housing resources available through the Student Life Office. Approved housing list maintained with vetted landlords. Shuttle service connects major off-campus areas.",
-    },
-    "scholarships": {
-        "merit": "Merit scholarships: Dean's List (3.5+ GPA per semester), Presidential Scholar (top 5% of class), Department Awards (by application). Renewable if GPA requirements maintained.",
-        "needbased": "Need-based aid determined by FAFSA. Institutional grants cover up to full tuition for qualifying students. Work-study positions available across campus.",
-    },
-}
+# ─── Groq LLM Integration ───
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+groq_client = None
+
+try:
+    if GROQ_API_KEY:
+        from groq import Groq
+        groq_client = Groq(api_key=GROQ_API_KEY)
+except ImportError:
+    pass
+
 
 SUGGESTED_QUESTIONS = [
-    "When is the library open during finals?",
-    "How do I register for courses?",
-    "Where can I find exam preparation resources?",
-    "What study rooms are available?",
-    "How do I submit an assignment?",
-    "What are the grading policies?",
-    "Where is the IT help desk?",
-    "How do I join a student club?",
-    "When are career fairs held?",
-    "How do I access course materials?",
-    "What digital resources does the library offer?",
-    "Tell me about research opportunities",
-    "What scholarships are available?",
-    "How do I access campus WiFi?",
-    "What are the computer lab hours?",
-    "How do I get academic advising?",
-    "What housing options are available?",
-    "How do I apply for financial aid?",
+    "Explain machine learning in simple terms",
+    "Generate a quiz about data structures",
+    "Summarize the key concepts in calculus",
+    "Create flashcards for computer networks",
+    "What resources do we have on Python programming?",
+    "Help me study for my algorithms exam",
+    "What are the library hours?",
+    "Suggest a study plan for physics",
+    "Quiz me on database concepts",
+    "Explain the difference between TCP and UDP",
+    "What courses are available in computer science?",
+    "Help me understand quantum mechanics basics",
 ]
 
+# ─── Institutional Knowledge Base ───
+KNOWLEDGE_BASE = {
+    "library": "The main library is open Mon-Fri 8AM-10PM, Sat 9AM-6PM, Sun 12PM-8PM. Finals week hours extend to midnight. Digital resources (IEEE, ACM, Springer, JSTOR) available 24/7 through the library portal. Study rooms bookable online. Science reading room in Building D.",
+    "exams": "Midterms: Week 7-8. Finals: Week 15-16. Supplementary exams 2 weeks after finals. Grading: A(90-100), B(80-89), C(70-79), D(60-69), F(<60). Bring valid ID. Accommodations through Disability Services. Past papers available in repository.",
+    "courses": "Registration opens 2 weeks before semester. Priority: seniors first. Prerequisites in catalog. Withdrawal deadline: Week 10. Course materials on content repository. Some courses use OpenStax free textbooks.",
+    "facilities": "Computer labs in Buildings B/D, 7AM-11PM. Software: MATLAB, AutoCAD, VS Code, Python, Adobe Suite. Campus WiFi: 'EduKno-Campus' with student credentials. Study rooms in library (10 rooms) and Building E (5 rooms).",
+    "support": "Academic advisors: Student Success Center, Building A. Walk-in Mon-Wed 10AM-2PM. IT support: ext. 4000 or Building B Room 101. Counseling: Building E 2nd floor (free, confidential). Financial aid: Building A Room 200.",
+    "events": "Weekly research seminars (Thursdays), monthly guest lectures, annual hackathon (November), research symposium (April). 50+ student clubs. Career fairs: September and March.",
+    "scholarships": "Merit: Dean's List (3.5+ GPA), Presidential Scholar (top 5%). Need-based via FAFSA. Applications due March 1 for fall. Emergency financial assistance through Dean of Students.",
+    "housing": "6 residence halls with single/double/suite rooms. All include WiFi and laundry. Housing deposit due April 1. Off-campus shuttle connects major areas.",
+}
 
-# ─── TF-IDF based RAG engine ───
+
+# ─── TF-IDF RAG Engine ───
 class RAGEngine:
-    """TF-IDF based Retrieval-Augmented Generation engine."""
-
     def __init__(self):
         self.vectorizer = TfidfVectorizer(
-            stop_words="english",
-            max_features=5000,
-            ngram_range=(1, 2),
-            min_df=1,
+            stop_words="english", max_features=5000, ngram_range=(1, 2), min_df=1
         )
-        self.documents: List[Dict[str, Any]] = []
-        self.tfidf_matrix = None
-        self._built = False
-
-    def _build_corpus(self, db_contents: List[Content]):
-        """Build document corpus from institutional knowledge + DB content."""
-        self.documents = []
-
-        # Add institutional knowledge as documents
-        for topic, subtopics in INSTITUTIONAL_KNOWLEDGE.items():
-            for subtopic, info in subtopics.items():
-                self.documents.append({
-                    "text": f"{topic} {subtopic}: {info}",
-                    "source_type": "institutional",
-                    "topic": f"{topic}/{subtopic}",
-                    "content": info,
-                    "title": f"{topic.title()} > {subtopic.title()}",
-                })
-
-        # Add DB content as documents
-        for content in db_contents:
-            text_parts = [content.title]
-            if content.description:
-                text_parts.append(content.description)
-            if content.tags:
-                text_parts.extend(content.tags)
-            if content.category:
-                text_parts.append(content.category)
-
-            self.documents.append({
-                "text": " ".join(text_parts),
-                "source_type": "content",
-                "title": content.title,
-                "content_type": content.content_type,
-                "content_id": content.id,
-                "content": content.description or content.title,
-            })
-
-        # Fit TF-IDF
-        if self.documents:
-            corpus = [d["text"] for d in self.documents]
-            self.tfidf_matrix = self.vectorizer.fit_transform(corpus)
-            self._built = True
 
     def retrieve(self, query: str, db: Session, top_k: int = 5) -> List[Dict]:
-        """Retrieve most relevant documents for the query."""
-        # Rebuild corpus each time to include latest content
-        db_contents = db.query(Content).filter(Content.is_active == True).all()
-        self._build_corpus(db_contents)
+        documents = []
 
-        if not self._built or not self.documents:
+        # Knowledge base docs
+        for topic, text in KNOWLEDGE_BASE.items():
+            documents.append({
+                "text": f"{topic}: {text}",
+                "source_type": "knowledge",
+                "title": topic.title(),
+                "content": text,
+            })
+
+        # DB content
+        db_contents = db.query(Content).filter(Content.is_active == True).all()
+        for c in db_contents:
+            parts = [c.title]
+            if c.description:
+                parts.append(c.description)
+            if c.tags:
+                parts.extend(c.tags)
+            documents.append({
+                "text": " ".join(parts),
+                "source_type": "content",
+                "title": c.title,
+                "content_type": c.content_type,
+                "content_id": c.id,
+                "content": c.description or c.title,
+                "url": c.file_url or "",
+            })
+
+        if not documents:
             return []
 
-        # Transform query
-        query_vec = self.vectorizer.transform([query])
-        similarities = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
+        corpus = [d["text"] for d in documents] + [query]
+        try:
+            tfidf = self.vectorizer.fit_transform(corpus)
+            sims = cosine_similarity(tfidf[-1:], tfidf[:-1]).flatten()
+        except Exception:
+            return []
 
-        # Get top-K indices
-        top_indices = np.argsort(similarities)[::-1][:top_k]
-
+        top_idx = np.argsort(sims)[::-1][:top_k]
         results = []
-        for idx in top_indices:
-            score = similarities[idx]
-            if score > 0.01:  # Minimum relevance threshold
-                doc = self.documents[idx].copy()
-                doc["relevance_score"] = float(score)
+        for i in top_idx:
+            if sims[i] > 0.01:
+                doc = documents[i].copy()
+                doc["score"] = float(sims[i])
                 results.append(doc)
-
         return results
 
 
-# Singleton RAG engine
-rag_engine = RAGEngine()
+rag = RAGEngine()
 
 
-def generate_response(
-    query: str,
-    retrieved_docs: List[Dict],
-    user_role: str,
-    history: List[Dict] = None,
-) -> str:
-    """Generate a contextual response based on retrieved documents."""
-    if not retrieved_docs:
-        return (
-            f"I appreciate your question! While I don't have specific information about that topic, "
-            f"I'd recommend checking the content repository for relevant resources or contacting "
-            f"the appropriate department directly. As a {user_role}, you can also reach out to "
-            f"your advisor for personalized guidance.\n\n"
-            f"Try asking about:\n"
-            f"• Library services and hours\n"
-            f"• Course registration and materials\n"
-            f"• Exam schedules and preparation\n"
-            f"• Campus facilities and WiFi\n"
-            f"• Academic support and advising"
+def call_llm(system_prompt: str, user_message: str, context: str = "") -> Optional[str]:
+    """Call Groq LLM. Returns None if unavailable."""
+    if not groq_client:
+        return None
+    try:
+        messages = [{"role": "system", "content": system_prompt}]
+        if context:
+            messages.append({"role": "user", "content": f"Context:\n{context}"})
+        messages.append({"role": "user", "content": user_message})
+
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1024,
         )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"LLM error: {e}")
+        return None
 
-    response_parts = []
 
-    # Separate institutional vs content sources
-    institutional = [d for d in retrieved_docs if d["source_type"] == "institutional"]
-    content_docs = [d for d in retrieved_docs if d["source_type"] == "content"]
+def call_llm_json(system_prompt: str, user_message: str, context: str = "") -> Optional[str]:
+    """Call Groq LLM with JSON mode. Returns None if unavailable."""
+    if not groq_client:
+        return None
+    try:
+        messages = [{"role": "system", "content": system_prompt}]
+        if context:
+            messages.append({"role": "user", "content": f"Context:\n{context}"})
+        messages.append({"role": "user", "content": user_message})
 
-    # Build answer from institutional knowledge
-    if institutional:
-        # Use the most relevant institutional source as the primary answer
-        primary = institutional[0]
-        response_parts.append(primary["content"])
-
-        # Add supplementary info from other institutional sources
-        if len(institutional) > 1:
-            response_parts.append("\n\n**Additional Information:**")
-            for doc in institutional[1:3]:
-                response_parts.append(f"\n• {doc['content']}")
-
-    # Add content recommendations
-    if content_docs:
-        response_parts.append(
-            "\n\n📚 **Relevant Resources in Our Knowledge Base:**"
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=2048,
+            response_format={"type": "json_object"},
         )
-        for doc in content_docs[:4]:
-            ctype = doc.get("content_type", "resource")
-            emoji = {"document": "📄", "video": "🎬", "article": "📰", "course": "🎓", "presentation": "📊"}.get(ctype, "📄")
-            response_parts.append(f"\n{emoji} **{doc['title']}** ({ctype})")
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"LLM JSON error: {e}")
+        return None
 
-    # Add context-aware tips based on role
-    role_tips = {
-        "student": "\n\n💡 *Tip: Check your personalized recommendations for more study resources! You can also bookmark resources for quick access later.*",
-        "faculty": "\n\n💡 *Tip: You can upload additional materials for your students through the content manager. Your contributions earn reputation points!*",
-        "staff": "\n\n💡 *Tip: For administrative queries, check the staff resources section or contact the appropriate department.*",
-        "admin": "\n\n💡 *Tip: You have access to all administrative tools, analytics dashboards, and content management features.*",
-        "alumni": "\n\n💡 *Tip: As an alumnus, you can access career resources, contribute knowledge, and connect with current students.*",
-        "parent": "\n\n💡 *Tip: You can track your student's academic progress and access relevant institutional information.*",
+
+def generate_quiz(topic: str, docs: List[Dict]) -> Dict:
+    """Generate a structured quiz with questions."""
+    context = "\n\n".join([f"Title: {d['title']}\nContent: {d['content']}" for d in docs[:5]])
+
+    llm_result = call_llm_json(
+        "You are an educational quiz generator. Create a 5-question multiple-choice quiz. "
+        "Return valid JSON in this exact format: "
+        '{"title":"Quiz Title","questions":[{"question":"...","options":["A","B","C","D"],"correct":0,"explanation":"..."}]} '
+        "where 'correct' is the 0-based index of the correct option.",
+        f"Generate a quiz about: {topic}",
+        context,
+    )
+    if llm_result:
+        try:
+            data = json.loads(llm_result)
+            if "questions" in data:
+                return {"type": "quiz", "data": data}
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback: generate from docs
+    questions = []
+    for i, doc in enumerate(docs[:5], 1):
+        content = doc.get("content", "")
+        title = doc.get("title", "")
+        sentences = [s.strip() for s in re.split(r'[.!?]+', content) if len(s.strip()) > 20]
+        if sentences:
+            q_sentence = sentences[0]
+            words = q_sentence.split()
+            if len(words) > 5:
+                key_word = words[len(words)//2]
+                blank = q_sentence.replace(key_word, "______", 1)
+                questions.append({
+                    "question": f"Fill in the blank: {blank}",
+                    "options": [key_word, words[0], words[-1], words[len(words)//3]],
+                    "correct": 0,
+                    "explanation": q_sentence,
+                })
+            else:
+                questions.append({
+                    "question": f"What is the key concept of '{title}'?",
+                    "options": [sentences[0][:60], "None of these", "All of the above", "Not enough information"],
+                    "correct": 0,
+                    "explanation": sentences[0],
+                })
+    
+    return {
+        "type": "quiz",
+        "data": {
+            "title": f"Quiz: {topic.title()}",
+            "questions": questions if questions else [{
+                "question": f"What do you know about {topic}?",
+                "options": ["I need to study more", "I'm an expert", "I've heard of it", "Never seen it"],
+                "correct": 0,
+                "explanation": "Keep studying to learn more!",
+            }],
+        },
     }
-    response_parts.append(role_tips.get(user_role, ""))
 
+
+def generate_flashcards(topic: str, docs: List[Dict], user_id: str, db: Session) -> Dict:
+    """Generate structured flashcards and save them to the database."""
+    context = "\n\n".join([f"Title: {d['title']}\nContent: {d['content']}" for d in docs[:5]])
+
+    cards = []
+    llm_result = call_llm_json(
+        "You are a flashcard creator. Create 6 flashcards from the context. "
+        "Return valid JSON in this exact format: "
+        '{"cards":[{"front":"question or term","back":"answer or definition"}]}',
+        f"Create flashcards about: {topic}",
+        context,
+    )
+    if llm_result:
+        try:
+            data = json.loads(llm_result)
+            if "cards" in data:
+                cards = data["cards"]
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback
+    if not cards:
+        for doc in docs[:6]:
+            content = doc.get("content", "")
+            title = doc.get("title", "")
+            sentences = [s.strip() for s in re.split(r'[.!?]+', content) if len(s.strip()) > 15]
+            if sentences:
+                cards.append({"front": title, "back": sentences[0] + "."})
+
+    # Save to database for SRS
+    deck_name = topic.title() if topic else "General"
+    saved_cards = []
+    for c in cards:
+        card = Flashcard(
+            user_id=user_id,
+            deck_name=deck_name,
+            front=c["front"],
+            back=c["back"],
+        )
+        db.add(card)
+        db.flush()
+        saved_cards.append({
+            "id": card.id,
+            "front": c["front"],
+            "back": c["back"],
+            "deck_name": deck_name,
+        })
+    db.commit()
+
+    return {
+        "type": "flashcards",
+        "data": {
+            "deck_name": deck_name,
+            "cards": saved_cards,
+            "saved_count": len(saved_cards),
+        },
+    }
+
+
+def generate_summary(topic: str, docs: List[Dict]) -> str:
+    """Generate a summary - returns markdown text."""
+    context = "\n\n".join([f"Title: {d['title']}\nContent: {d['content']}" for d in docs[:5]])
+
+    llm = call_llm(
+        "You are an educational summarizer. Create a clear, structured summary of the topic "
+        "using bullet points, key takeaways, and important concepts. Format with markdown. "
+        "Do NOT include any source references or citations. Focus only on the content.",
+        f"Summarize the key concepts about: {topic}",
+        context,
+    )
+    if llm:
+        return llm
+
+    # Fallback
+    summary = f"📋 **Summary: {topic.title()}**\n\n"
+    for doc in docs[:4]:
+        content = doc.get("content", "")
+        title = doc.get("title", "")
+        sentences = [s.strip() for s in re.split(r'[.!?]+', content) if len(s.strip()) > 20]
+        key_points = sentences[:3]
+        if key_points:
+            summary += f"**{title}:**\n"
+            for p in key_points:
+                summary += f"• {p}.\n"
+            summary += "\n"
+    return summary
+
+
+def generate_notes(topic: str, docs: List[Dict]) -> str:
+    """Generate study notes - returns markdown text."""
+    context = "\n\n".join([f"Title: {d['title']}\nContent: {d['content']}" for d in docs[:5]])
+
+    llm = call_llm(
+        "You are a study notes creator. Create well-organized, concise study notes "
+        "with headers, bullet points, key formulas/concepts, and mnemonics where helpful. "
+        "Format with markdown. Do NOT include source references.",
+        f"Create study notes about: {topic}",
+        context,
+    )
+    if llm:
+        return llm
+
+    # Fallback
+    notes = f"📝 **Study Notes: {topic.title()}**\n\n"
+    for doc in docs[:4]:
+        sentences = [s.strip() for s in re.split(r'[.!?]+', doc.get("content", "")) if len(s.strip()) > 15]
+        if sentences:
+            notes += f"### {doc['title']}\n"
+            for s in sentences[:4]:
+                notes += f"- {s}.\n"
+            notes += "\n"
+    return notes
+
+
+def handle_command(query: str, docs: List[Dict], user: User, db: Session) -> Optional[Dict]:
+    """Handle slash commands. Returns structured data for rich UI."""
+    lower = query.strip().lower()
+
+    if lower.startswith("/quiz"):
+        topic = query[5:].strip() or "general knowledge"
+        return generate_quiz(topic, docs)
+
+    if lower.startswith("/flashcards"):
+        topic = query[11:].strip() or "general"
+        return generate_flashcards(topic, docs, user.id, db)
+
+    if lower.startswith("/summary"):
+        topic = query[8:].strip() or "this topic"
+        return {"type": "text", "data": generate_summary(topic, docs)}
+
+    if lower.startswith("/notes"):
+        topic = query[6:].strip() or "this topic"
+        return {"type": "text", "data": generate_notes(topic, docs)}
+
+    return None
+
+
+def generate_conversational_response(query: str, docs: List[Dict], user_role: str, history: List) -> str:
+    """Generate a conversational response using LLM or smart fallback."""
+    context = "\n\n".join([
+        f"Source: {d['title']} ({d['source_type']})\nContent: {d['content'][:500]}"
+        for d in docs[:6]
+    ])
+
+    # History for multi-turn
+    history_text = ""
+    if history:
+        recent = history[-4:]
+        history_text = "Recent conversation:\n" + "\n".join([
+            f"{'User' if m.get('sender') == 'user' else 'Bot'}: {m.get('text', '')[:200]}"
+            for m in recent
+        ])
+
+    system_prompt = (
+        "You are EduBot, an intelligent AI assistant for an educational knowledge management platform called EduKno. "
+        "You help students, faculty, and staff with academic questions, study resources, and institutional information. "
+        "Use the provided context to answer accurately. If the context doesn't cover the question, use your knowledge but say so. "
+        "Be concise but thorough. Use markdown formatting for readability. "
+        "Do NOT list source references at the end of your response — those are handled separately. "
+        "Mention specific resources from the context when relevant. "
+        f"The user's role is: {user_role}. "
+        "Available commands: /quiz <topic>, /summary <topic>, /flashcards <topic>, /notes <topic>. "
+        "If the user seems to want study help, suggest these commands."
+    )
+
+    full_context = f"{context}\n\n{history_text}" if history_text else context
+    llm_response = call_llm(system_prompt, query, full_context)
+
+    if llm_response:
+        return llm_response
+
+    # Smart fallback without LLM
+    if not docs:
+        return (
+            "I don't have specific information about that yet, but I can help you with many topics!\n\n"
+            "• **Academic resources** — courses, materials, study guides\n"
+            "• **Campus info** — library, labs, facilities, WiFi\n"
+            "• **Study tools** — use `/quiz`, `/summary`, `/flashcards`, `/notes` + a topic\n"
+            "• **Support** — academic advising, IT help, counseling\n\n"
+            "For example: `/quiz data structures` or `/summary machine learning`"
+        )
+
+    # Build response from retrieved docs
+    response_parts = []
+    knowledge_docs = [d for d in docs if d["source_type"] == "knowledge"]
+    content_docs = [d for d in docs if d["source_type"] == "content"]
+
+    if knowledge_docs:
+        response_parts.append(knowledge_docs[0]["content"])
+
+    if content_docs:
+        response_parts.append("\n\n📚 **Relevant Resources:**")
+        emojis = {"document": "📄", "video": "🎬", "article": "📰", "course": "🎓", "presentation": "📊"}
+        for d in content_docs[:3]:
+            emoji = emojis.get(d.get("content_type", ""), "📄")
+            response_parts.append(f"\n{emoji} **{d['title']}** ({d.get('content_type', 'resource')})")
+
+    response_parts.append(
+        "\n\n💡 *Try `/quiz`, `/summary`, `/flashcards`, or `/notes` + topic for study tools!*"
+    )
     return "".join(response_parts)
 
 
@@ -248,70 +434,90 @@ def chat(
     query = message.message
     history = message.history or []
 
-    # Build context-enriched query using conversation history
+    # Build context-enriched query for retrieval
     context_query = query
+    for cmd in ["/quiz", "/summary", "/flashcards", "/notes"]:
+        if query.lower().startswith(cmd):
+            context_query = query[len(cmd):].strip() or query
+            break
+
     if history:
-        recent_context = " ".join([
-            m.get("text", "") for m in history[-3:]
-            if m.get("sender") == "user"
+        recent_user_msgs = " ".join([
+            m.get("text", "") for m in history[-2:] if m.get("sender") == "user"
         ])
-        context_query = f"{recent_context} {query}"
+        context_query = f"{recent_user_msgs} {context_query}"
 
-    # Retrieve relevant documents using TF-IDF RAG
-    retrieved_docs = rag_engine.retrieve(context_query, db, top_k=6)
+    # RAG retrieval
+    docs = rag.retrieve(context_query, db, top_k=6)
 
-    # Generate response
-    response = generate_response(query, retrieved_docs, current_user.role, history)
+    # Handle slash commands — returns structured data
+    cmd_result = handle_command(query, docs, current_user, db)
+    
+    # Build response
+    if cmd_result:
+        if cmd_result["type"] == "text":
+            response = cmd_result["data"]
+            rich_content = None
+        else:
+            # For quiz/flashcards, set a text summary + attach rich content
+            if cmd_result["type"] == "quiz":
+                qcount = len(cmd_result["data"].get("questions", []))
+                response = f"📝 Generated a **{qcount}-question quiz** about the topic! Answer the questions below."
+            elif cmd_result["type"] == "flashcards":
+                ccount = cmd_result["data"].get("saved_count", 0)
+                deck = cmd_result["data"].get("deck_name", "")
+                response = f"🎴 Created **{ccount} flashcards** in the **{deck}** deck! They've been saved to your SRS system for spaced repetition review. Flip the cards below to study!"
+            else:
+                response = "Here you go!"
+            rich_content = cmd_result
+    else:
+        response = generate_conversational_response(query, docs, current_user.role, history)
+        rich_content = None
 
-    # Format sources for citation
+    # Sources — only for normal responses, not commands
     sources = []
-    seen_titles = set()
-    for doc in retrieved_docs:
-        title = doc.get("title", "Unknown")
-        if title in seen_titles:
-            continue
-        seen_titles.add(title)
-
-        source_entry = {"title": title, "type": doc["source_type"]}
-        if doc["source_type"] == "content":
-            source_entry["id"] = doc.get("content_id", "")
-            source_entry["type"] = doc.get("content_type", "resource")
-        sources.append(source_entry)
+    if not cmd_result:
+        seen = set()
+        for d in docs[:3]:  # Limit to top 3 sources
+            t = d.get("title", "Unknown")
+            if t in seen:
+                continue
+            seen.add(t)
+            entry = {"title": t, "type": d["source_type"]}
+            if d["source_type"] == "content":
+                entry["id"] = d.get("content_id", "")
+                entry["type"] = d.get("content_type", "resource")
+            sources.append(entry)
 
     # Track interaction
-    interaction = Interaction(
-        user_id=current_user.id,
-        action="chat",
-        query=query,
-        context={"sources_count": len(sources), "history_length": len(history)},
-    )
-    db.add(interaction)
+    db.add(Interaction(user_id=current_user.id, action="chat", query=query,
+                       context={"sources": len(sources), "has_llm": groq_client is not None}))
     db.commit()
 
-    # Suggested follow-up questions (context-aware)
-    remaining = [q for q in SUGGESTED_QUESTIONS if q.lower() != query.lower()]
-    # Try to pick contextually relevant suggestions
-    query_terms = set(query.lower().split())
-    scored_suggestions = []
-    for q in remaining:
-        score = sum(1 for w in query_terms if w in q.lower())
-        scored_suggestions.append((q, score))
-    scored_suggestions.sort(key=lambda x: x[1], reverse=True)
+    # Context-aware suggestions
+    is_study_query = any(w in query.lower() for w in ["study", "exam", "learn", "quiz", "help"])
+    if is_study_query:
+        suggestions = [
+            f"/quiz {context_query[:30]}",
+            f"/summary {context_query[:30]}",
+            f"/flashcards {context_query[:30]}",
+            "What study resources are available?",
+        ]
+    else:
+        remaining = [q for q in SUGGESTED_QUESTIONS if q.lower() != query.lower()]
+        suggestions = random.sample(remaining, min(4, len(remaining)))
 
-    # Mix: 1-2 related + 1-2 random
-    related = [q for q, s in scored_suggestions if s > 0][:2]
-    unrelated = [q for q, s in scored_suggestions if s == 0]
-    random_picks = random.sample(unrelated, min(2, len(unrelated))) if unrelated else []
-    suggested = (related + random_picks)[:4]
-
-    return ChatResponse(
-        response=response,
-        sources=sources,
-        suggested_questions=suggested,
-    )
+    result = ChatResponse(response=response, sources=sources, suggested_questions=suggestions)
+    
+    # Attach rich_content as extra data
+    response_dict = result.model_dump()
+    if rich_content:
+        response_dict["rich_content"] = rich_content
+    
+    from fastapi.responses import JSONResponse
+    return JSONResponse(content=response_dict)
 
 
 @router.get("/suggestions", response_model=List[str])
 def get_suggestions():
-    """Get suggested questions for the chatbot."""
     return random.sample(SUGGESTED_QUESTIONS, min(6, len(SUGGESTED_QUESTIONS)))

@@ -34,6 +34,10 @@ export const authAPI = {
     login: (data: any) => api.post('/auth/login', data),
     getMe: () => api.get('/auth/me'),
     updateMe: (data: any) => api.put('/auth/me', data),
+    getPermissions: () => api.get('/auth/permissions'),
+    listUsers: () => api.get('/auth/users'),
+    updateUserRole: (userId: string, role: string) => api.put(`/auth/users/${userId}/role?role=${role}`),
+    deactivateUser: (userId: string) => api.delete(`/auth/users/${userId}`),
 };
 
 // ── Content ──
@@ -72,6 +76,32 @@ export const chatbotAPI = {
     suggestions: () => api.get('/chatbot/suggestions'),
 };
 
+// ── Study Timer ──
+export const studyAPI = {
+    createSession: (data: any) => api.post('/study/sessions', data),
+    listSessions: (days?: number) => api.get('/study/sessions', { params: { days } }),
+    getStats: (days?: number) => api.get('/study/stats', { params: { days } }),
+};
+
+// ── Notes ──
+export const notesAPI = {
+    create: (data: any) => api.post('/notes/', data),
+    list: (params?: any) => api.get('/notes/', { params }),
+    get: (id: string) => api.get(`/notes/${id}`),
+    update: (id: string, data: any) => api.put(`/notes/${id}`, data),
+    delete: (id: string) => api.delete(`/notes/${id}`),
+};
+
+// ── Collections ──
+export const collectionsAPI = {
+    create: (data: any) => api.post('/collections/', data),
+    list: () => api.get('/collections/'),
+    get: (id: string) => api.get(`/collections/${id}`),
+    addItem: (id: string, contentId: string) => api.post(`/collections/${id}/items`, { content_id: contentId }),
+    removeItem: (id: string, contentId: string) => api.delete(`/collections/${id}/items/${contentId}`),
+    delete: (id: string) => api.delete(`/collections/${id}`),
+};
+
 // ── Gamification ──
 export const gamificationAPI = {
     badges: () => api.get('/gamification/badges'),
@@ -87,6 +117,23 @@ export const analyticsAPI = {
     content: () => api.get('/analytics/content'),
     users: () => api.get('/analytics/users'),
     search: () => api.get('/analytics/search'),
+    personal: () => api.get('/analytics/personal'),
+};
+
+export const analyzerAPI = {
+    analyzeDocument: (formData: FormData) => api.post('/analyze/document', formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+        },
+    }),
+};
+
+export const flashcardsAPI = {
+    list: (deck?: string) => api.get('/flashcards/', { params: { deck } }),
+    getDue: () => api.get('/flashcards/due'),
+    create: (data: any) => api.post('/flashcards/', data),
+    review: (id: string, quality: number) => api.post(`/flashcards/${id}/review`, { quality }),
+    delete: (id: string) => api.delete(`/flashcards/${id}`),
 };
 
 export default api;

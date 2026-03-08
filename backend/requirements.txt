@@ -6,6 +6,7 @@ passlib[bcrypt]
 python-multipart
 scikit-learn
 numpy
-pydantic
-python-jose[cryptography]
-bcrypt
+pydantic==2.5.2
+python-jose[cryptography]==3.3.0
+bcrypt==4.0.1
+groq

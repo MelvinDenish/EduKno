@@ -4,7 +4,7 @@ from database import engine, Base, SessionLocal
 from models import User, Content, Interaction, Badge, UserBadge, SearchLog, Bookmark
 
 # Import routers
-from routers import auth, content, search, recommendations, chatbot, gamification, analytics
+from routers import auth, content, search, recommendations, chatbot, gamification, analytics, study, notes, collections, analyzer, flashcards, rooms
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -32,6 +32,12 @@ app.include_router(recommendations.router)
 app.include_router(chatbot.router)
 app.include_router(gamification.router)
 app.include_router(analytics.router)
+app.include_router(study.router)
+app.include_router(notes.router)
+app.include_router(collections.router)
+app.include_router(analyzer.router)
+app.include_router(flashcards.router)
+app.include_router(rooms.router)
 
 
 @app.on_event("startup")

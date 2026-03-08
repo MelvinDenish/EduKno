@@ -206,11 +206,134 @@ class BookmarkResponse(BaseModel):
     id: str
     content_id: str
     content: ContentResponse
-    created_at: datetime = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
 
 
+# ─── Study Session Schemas ───
+class StudySessionCreate(BaseModel):
+    content_id: Optional[str] = None
+    duration_seconds: int = Field(..., gt=0)
+    session_type: str = "focus"
+
+class StudySessionResponse(BaseModel):
+    id: str
+    content_id: Optional[str] = None
+    content_title: str = ""
+    duration_seconds: int
+    session_type: str
+    started_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Note Schemas ───
+class NoteCreate(BaseModel):
+    content_id: Optional[str] = None
+    title: str = ""
+    text: str = Field(..., min_length=1)
+    color: str = "#6366f1"
+
+class NoteUpdate(BaseModel):
+    title: Optional[str] = None
+    text: Optional[str] = None
+    color: Optional[str] = None
+
+class NoteResponse(BaseModel):
+    id: str
+    content_id: Optional[str] = None
+    content_title: str = ""
+    title: str = ""
+    text: str
+    color: str = "#6366f1"
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Collection Schemas ───
+class CollectionCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str = ""
+    color: str = "#6366f1"
+    is_public: bool = False
+
+class CollectionItemAdd(BaseModel):
+    content_id: str
+
+class CollectionItemResponse(BaseModel):
+    id: str
+    content_id: str
+    content: ContentResponse
+    order: int = 0
+    added_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class CollectionResponse(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    color: str = "#6366f1"
+    is_public: bool = False
+    item_count: int = 0
+    items: List[CollectionItemResponse] = []
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Personal Analytics Schemas ───
+class DailyStudyTime(BaseModel):
+    date: str
+    seconds: int
+
+class CategoryBreakdown(BaseModel):
+    category: str
+    count: int
+
+class PersonalAnalyticsResponse(BaseModel):
+    total_study_seconds: int = 0
+    total_sessions: int = 0
+    total_notes: int = 0
+    total_collections: int = 0
+    total_bookmarks: int = 0
+    daily_study: List[DailyStudyTime] = []
+    category_breakdown: List[CategoryBreakdown] = []
+    recent_activity: List[Dict[str, Any]] = []
+    streak_days: int = 0
+
+
 # Forward reference resolution
 TokenResponse.model_rebuild()
+
+
+class FlashcardCreate(BaseModel):
+    deck_name: str = "Default"
+    front: str
+    back: str
+
+class FlashcardReview(BaseModel):
+    quality: int
+
+class FlashcardResponse(BaseModel):
+    id: str
+    deck_name: str
+    front: str
+    back: str
+    repetition: int
+    interval: int
+    easiness_factor: float
+    next_review_date: datetime
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

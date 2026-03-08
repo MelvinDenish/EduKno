@@ -11,6 +11,14 @@ import ChatbotPage from './pages/ChatbotPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import LeaderboardPage from './pages/LeaderboardPage';
 import ProfilePage from './pages/ProfilePage';
+import StudyTimerPage from './pages/StudyTimerPage';
+import NotesPage from './pages/NotesPage';
+import CollectionsPage from './pages/CollectionsPage';
+import PersonalAnalyticsPage from './pages/PersonalAnalyticsPage';
+import BookmarksPage from './pages/BookmarksPage';
+import AnalyzerPage from './pages/AnalyzerPage';
+import FlashcardsPage from './pages/FlashcardsPage';
+import StudyRoomsPage from './pages/StudyRoomsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
     const { isAuthenticated, loading } = useAuth();
@@ -50,8 +58,16 @@ function AppLayout() {
                     <Route path="/upload" element={<UploadPage />} />
                     <Route path="/chatbot" element={<ChatbotPage />} />
                     <Route path="/analytics" element={<AnalyticsPage />} />
+                    <Route path="/my-analytics" element={<PersonalAnalyticsPage />} />
+                    <Route path="/analyzer" element={<AnalyzerPage />} />
+                    <Route path="/flashcards" element={<FlashcardsPage />} />
+                    <Route path="/rooms" element={<StudyRoomsPage />} />
                     <Route path="/leaderboard" element={<LeaderboardPage />} />
                     <Route path="/profile" element={<ProfilePage />} />
+                    <Route path="/study-timer" element={<StudyTimerPage />} />
+                    <Route path="/notes" element={<NotesPage />} />
+                    <Route path="/collections" element={<CollectionsPage />} />
+                    <Route path="/bookmarks" element={<BookmarksPage />} />
                 </Routes>
             </main>
         </div>
